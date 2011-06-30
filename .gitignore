@@ -1,0 +1,7 @@
+project
+lib
+target
+doc
+tmp
+build.sbt
+.*swp
