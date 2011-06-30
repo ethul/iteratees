@@ -20,25 +20,25 @@ trait Iteratee[S,M[_],A] extends For[S,M,A] {
 }
 
 object Iteratee {
-  def done[S,M[_]:Monad,A](a: A, s: Stream[S]): Iteratee[S,M,A] = {
+  def idone[S,M[_]:Monad,A](a: A, s: Stream[S]): Iteratee[S,M,A] = {
     new Iteratee[S,M,A] {
       def fold[R](done: Done[S,M,A,R], cont: Cont[S,M,A,R]): M[R] = done(a,s)
     }
   }
 
-  def cont[S,M[_]:Monad,A](k: Stream[S] => Iteratee[S,M,A], e: Option[Error]): Iteratee[S,M,A] = {
+  def icont[S,M[_]:Monad,A](k: Stream[S] => Iteratee[S,M,A], e: Option[Error]): Iteratee[S,M,A] = {
     new Iteratee[S,M,A] {
       def fold[R](done: Done[S,M,A,R], cont: Cont[S,M,A,R]): M[R] = cont(k,e)
     }
   }
 
-  def lift[S,M[_]:Monad,A](k: Stream[S] => Iteratee[S,M,A]): Iteratee[S,M,A] = {
+  def liftI[S,M[_]:Monad,A](k: Stream[S] => Iteratee[S,M,A]): Iteratee[S,M,A] = {
     new Iteratee[S,M,A] {
       def fold[R](done: Done[S,M,A,R], cont: Cont[S,M,A,R]): M[R] = cont(k,None)
     }
   }
 
-  def doneM[S,M[_]:Monad,A](a: A, s: Stream[S]): M[Iteratee[S,M,A]] = {
+  def idoneM[S,M[_]:Monad,A](a: A, s: Stream[S]): M[Iteratee[S,M,A]] = {
     val iter = new Iteratee[S,M,A] {
       def fold[R](done: Done[S,M,A,R], cont: Cont[S,M,A,R]): M[R] = done(a,s)
     }
@@ -47,7 +47,7 @@ object Iteratee {
 
   implicit def IterateePure[S,M[_]:Monad]: Pure[({type λ[α] = Iteratee[S,M,α]})#λ] = {
     new Pure[({type λ[α] = Iteratee[S,M,α]})#λ] {
-      def pure[A](a: => A): Iteratee[S,M,A] = done(a,EOF(None))
+      def pure[A](a: => A): Iteratee[S,M,A] = idone(a,EOF(None))
     }
   }
    
@@ -55,17 +55,17 @@ object Iteratee {
     new Bind[({type λ[α] = Iteratee[S,M,α]})#λ] {
       def bind[A,B](m: Iteratee[S,M,A], f: A => Iteratee[S,M,B]): Iteratee[S,M,B] = {
         new Iteratee[S,M,B] {
-          def fold[R](done1: Done[S,M,B,R], cont1: Cont[S,M,B,R]): M[R] = m.fold(
+          def fold[R](done: Done[S,M,B,R], cont: Cont[S,M,B,R]): M[R] = m.fold(
             done = {
               case (a,s) => f(a).fold(
-                done = done1,
+                done = done,
                 cont = {
-                  case (k,None) => k(s).fold(done = done1, cont = cont1)
-                  case (k,e) => cont1(k,e)
+                  case (k,None) => k(s).fold(done = done, cont = cont)
+                  case (k,e) => cont(k,e)
                 }
               )
             },
-            cont = (k,e) => cont1(s => bind(k(s),f),e)
+            cont = (k,e) => cont(s => bind(k(s),f),e)
           )
         }
       }
@@ -76,9 +76,9 @@ object Iteratee {
     new Functor[({type λ[α] = Iteratee[S,M,α]})#λ] {
       def fmap[A,B](m: Iteratee[S,M,A], f: A => B): Iteratee[S,M,B] = {
         new Iteratee[S,M,B] {
-          def fold[R](done1: Done[S,M,B,R], cont1: Cont[S,M,B,R]): M[R] = m.fold(
-            done = (a,s) => done1(f(a),s),
-            cont = (k,e) => cont1(s => fmap(k(s),f),e)
+          def fold[R](done: Done[S,M,B,R], cont: Cont[S,M,B,R]): M[R] = m.fold(
+            done = (a,s) => done(f(a),s),
+            cont = (k,e) => cont(s => fmap(k(s),f),e)
           )
         }
       }
@@ -91,11 +91,11 @@ object Iteratees {
 
   def head[M[_]:Monad]: Iteratee[String,M,Char] = {
     def step: Stream[String] => Iteratee[String,M,Char] = {
-      case Chunk(cs) if cs.isEmpty => cont(step, None)
-      case Chunk(cs) => done(cs head, Chunk(cs tail))
-      case stream => cont(step, Some("error"))
+      case Chunk(cs) if cs.isEmpty => icont(step, None)
+      case Chunk(cs) => idone(cs head, Chunk(cs tail))
+      case stream => icont(step, Some("error"))
     }
-    lift(step)
+    liftI(step)
   }
 
   def run[S,M[_]:Monad,A](iter: Iteratee[S,M,A]): M[A] = iter.fold(
@@ -123,10 +123,10 @@ object Enumeratees {
   def enumPure1Chunk[A](s: String): Enumerator[String,A] = {
     new Enumerator[String,A] {
       def apply[M[_]:Monad](iter: Iteratee[String,M,A]): M[Iteratee[String,M,A]] = iter.fold(
-        done = (a,t) => doneM(a, Chunk(s + t)),
+        done = (a,t) => idoneM(a, Chunk(s + t)),
         cont = {
           case (k,None) => k(Chunk(s)).pure
-          case (k,e) => cont(k,e).pure
+          case (k,e) => icont(k,e).pure
         }
       )
     }
@@ -140,10 +140,10 @@ object Id {
     def pure[A](a: => A): Id[A] = Id(a)
   }
   implicit def IdBind: Bind[Id] = new Bind[Id] {
-    def bind[A,B](m: Id[A], f: A => Id[B]): Id[B] = m match { case Id(a) => f(a) }
+    def bind[A,B](m: Id[A], f: A => Id[B]): Id[B] = f(m value)
   }
   implicit def IdFunctor: Functor[Id] = new Functor[Id] {
-    def fmap[A,B](m: Id[A], f: A => B): Id[B] = m match { case Id(a) => Id(f(a)) }
+    def fmap[A,B](m: Id[A], f: A => B): Id[B] = Id(f(m value))
   }
 } 
 
